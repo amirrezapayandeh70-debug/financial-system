@@ -1,0 +1,18 @@
+{
+  "symbol": "فملی",
+  "company": "ملی صنایع مس ایران — نمونه آزمایشی",
+  "source": "Synthetic fixture, not Codal data",
+  "price_source": "Synthetic fixture, not TSETMC data",
+  "adjustment_method": "Synthetic series, no corporate actions or cash dividends",
+  "period_end": "2025-12-01",
+  "available_on": "2026-01-01",
+  "basis": "TTM",
+  "currency": "IRR",
+  "data_kind": "synthetic",
+  "revenue_irr": 1500000000000000,
+  "net_income_irr": 450000000000000,
+  "equity_irr": 1800000000000000,
+  "assets_irr": 3000000000000000,
+  "liabilities_irr": 1200000000000000,
+  "shares_outstanding": 1000000000000
+}
