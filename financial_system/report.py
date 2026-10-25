@@ -28,6 +28,21 @@ def render(result):
     rows = "".join(f'<tr><td>{escape(p["date"])}</td><td>{fmt(p["close_irr"])}</td><td>{fmt(p["adjusted_close_irr"])}</td><td>{fmt(p["volume"])}</td></tr>' for p in reversed(result["prices"]))
     data_label = "داده ساختگی برای آزمایش؛ اطلاعات واقعی فملی نیست" if meta["data_kind"] == "synthetic" else "داده واردشده توسط کاربر؛ صحت منبع مستقلاً تأیید نشده"
     alert = "حجم حداقل دو برابر میانگین ۲۰ جلسه قبل است؛ علت نیازمند بررسی است." if result["volume_alert"] else "هشدار حجم فعال نیست." if result["volume_alert"] is False else "برای بررسی حجم، ۲۱ مشاهده و میانگین حجم غیرصفر لازم است."
+    benchmark_html = ""
+    if "benchmark" in result:
+        benchmark = result["benchmark"]
+        info = benchmark["metadata"]
+        benchmark_rows = "".join(
+            f"<tr><td>{n}</td><td>{escape(item['start']) if item else '—'}</td>"
+            f"<td>{fmt(item['benchmark_return'], True) if item else 'داده کافی نیست'}</td>"
+            f"<td>{fmt(item['excess_return'], True) if item else 'داده کافی نیست'}</td></tr>"
+            for n, item in benchmark["returns"].items())
+        benchmark_html = (f"<h2>مقایسه با {escape(info['name'])}</h2>"
+                          f"<p>منبع: {escape(info['source'])}؛ نوع داده: {escape(info['data_kind'])}؛ "
+                          f"روش تعدیل: {escape(info['adjustment_method'])}</p>"
+                          "<p>مازاد بازده، اختلاف بازده سهم و شاخص در تاریخ‌های یکسان است؛ واحد آن واحد درصد است.</p>"
+                          '<div class="scroll"><table><tr><th>جلسه سهم</th><th>شروع</th><th>بازده شاخص</th><th>مازاد بازده</th></tr>'
+                          f"{benchmark_rows}</table></div>")
     return f'''<!doctype html>
 <html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>گزارش {escape(meta['symbol'])}</title>
@@ -38,9 +53,9 @@ def render(result):
 <p class="notice">{data_label}</p><div class="grid">{tiles}</div>
 <section><h2>روند قیمت تعدیل‌شده</h2><p>از <bdi>{escape(result['prices'][0]['date'])}</bdi> تا <bdi>{escape(result['as_of'])}</bdi>؛ حداقل {fmt(low)} و حداکثر {fmt(high)} ریال. محور عمودی از صفر شروع نمی‌شود.</p>
 <svg viewBox="0 0 800 240" role="img" aria-label="روند قیمت تعدیل‌شده از قدیمی‌ترین به جدیدترین مشاهده"><polyline points="{points}" fill="none" stroke="#42dbc0" stroke-width="3"/></svg></section>
-<h2>یادداشت تحلیل</h2><p>{alert} این هشدار به‌تنهایی سیگنال خرید یا نشانه ورود پول هوشمند نیست.</p>
+{benchmark_html}<h2>یادداشت تحلیل</h2><p>{alert} این هشدار به‌تنهایی سیگنال خرید یا نشانه ورود پول هوشمند نیست.</p>
 <p>بازده از نسبت قیمت تعدیل‌شده محاسبه شده است. اعتبار آن به روش تعدیل منبع وابسته است؛ بازده کل شامل سود نقدی فقط با تعدیل مناسب سود نقدی قابل محاسبه است. ارزش بازار و نسبت‌های ارزش‌گذاری از قیمت تعدیل‌نشده استفاده می‌کنند.</p>
 <p>مبنای مالی: TTM؛ پایان دوره: <bdi>{escape(meta['period_end'])}</bdi>؛ تاریخ دسترسی به گزارش: <bdi>{escape(meta['available_on'])}</bdi>.</p>
 <p>منبع مالی: {escape(meta['source'])}<br>منبع قیمت: {escape(meta['price_source'])}<br>روش تعدیل: {escape(meta['adjustment_method'])}</p>
 <h2>مشاهدات ورودی</h2><div class="scroll"><table><thead><tr><th>تاریخ میلادی</th><th>قیمت (ریال)</th><th>قیمت تعدیل‌شده (ریال)</th><th>حجم (سهم)</th></tr></thead><tbody>{rows}</tbody></table></div>
-<p class="muted">اتصال زنده، مقایسه با شاخص، پرتفوی و پیشنهاد سرمایه‌گذاری در این نسخه پیاده‌سازی نشده‌اند.</p></main></html>'''
+<p class="muted">اتصال زنده، پرتفوی و پیشنهاد سرمایه‌گذاری در این نسخه پیاده‌سازی نشده‌اند.</p></main></html>'''

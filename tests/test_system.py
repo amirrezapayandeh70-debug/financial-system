@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+from datetime import date, timedelta
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ class AnalyticsTests(unittest.TestCase):
         self.f = load_fundamentals(ROOT / "data/demo/fundamentals.json")
 
     def test_known_returns_and_volume_without_current_session(self):
-        prices = [{"date": "2026-01-02", "close_irr": 100, "adjusted_close_irr": 100 + i, "volume": 10} for i in range(21)]
+        prices = [{"date": (date(2026, 1, 2) + timedelta(days=i)).isoformat(), "close_irr": 100, "adjusted_close_irr": 100 + i, "volume": 10} for i in range(21)]
         prices[-1]["volume"] = 100
         r = analyze(prices, self.f)
         self.assertAlmostEqual(r["returns"]["20"], .2)
@@ -27,7 +28,7 @@ class AnalyticsTests(unittest.TestCase):
         self.assertIsNone(r["returns"]["60"])
 
     def test_drawdown_and_valuation_use_distinct_price_series(self):
-        prices = [{"date": "2026-01-02", "close_irr": 200, "adjusted_close_irr": v, "volume": 0} for v in (100, 120, 90, 110)]
+        prices = [{"date": (date(2026, 1, 2) + timedelta(days=i)).isoformat(), "close_irr": 200, "adjusted_close_irr": v, "volume": 0} for i, v in enumerate((100, 120, 90, 110))]
         r = analyze(prices, self.f)
         self.assertAlmostEqual(r["max_drawdown"], -.25)
         self.assertEqual(r["market_cap_irr"], 200 * self.f["shares_outstanding"])
@@ -37,7 +38,7 @@ class AnalyticsTests(unittest.TestCase):
         prices = copy.deepcopy(self.prices)
         for p in prices:
             p["volume"] = 0
-        self.f.update(net_income_irr=-100, revenue_irr=0, equity_irr=0)
+        self.f.update(net_income_irr=-100, revenue_irr=0, equity_irr=0, liabilities_irr=self.f["assets_irr"])
         r = analyze(prices, self.f)
         self.assertIsNone(r["volume_alert"])
         self.assertIsNone(r["pe_ttm"])

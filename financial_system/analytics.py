@@ -1,8 +1,11 @@
 """Validated offline inputs and transparent, session-based analytics."""
 import csv
 import json
+import io
 import math
+import sys
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from statistics import mean
 
@@ -11,47 +14,84 @@ def number(value, label, minimum=None, integer=False):
     if isinstance(value, bool):
         raise ValueError(f"{label}: expected a number")
     try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
+        precise = Decimal(str(value))
+    except InvalidOperation as exc:
         raise ValueError(f"{label}: expected a number") from exc
-    if not math.isfinite(result) or (minimum is not None and result < minimum):
+    if not precise.is_finite() or (minimum is not None and precise < Decimal(str(minimum))):
         raise ValueError(f"{label}: invalid numeric range")
-    if integer and not result.is_integer():
-        raise ValueError(f"{label}: expected an integer")
+    if abs(precise) > Decimal(str(sys.float_info.max)):
+        raise ValueError(f"{label}: numeric range exceeds supported precision")
+    if integer:
+        if precise != precise.to_integral_value():
+            raise ValueError(f"{label}: expected an integer")
+        return int(precise)
+    result = float(precise)
+    if not math.isfinite(result):
+        raise ValueError(f"{label}: numeric range exceeds supported precision")
     return result
+
+
+def iso_day(value, label):
+    if not isinstance(value, str):
+        raise ValueError(f"{label}: expected YYYY-MM-DD")
+    try:
+        day = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{label}: expected YYYY-MM-DD") from exc
+    if day.isoformat() != value or day > date.today():
+        raise ValueError(f"{label}: expected a past or current YYYY-MM-DD date")
+    return day
+
+
+def validate_prices(rows):
+    if not isinstance(rows, list) or len(rows) < 2:
+        raise ValueError("At least two price observations are required")
+    normalized, seen = [], set()
+    for row in rows:
+        if not isinstance(row, dict) or not {"date", "close_irr", "adjusted_close_irr", "volume"}.issubset(row):
+            raise ValueError("Each price observation must contain date, close_irr, adjusted_close_irr, volume")
+        day = iso_day(row["date"], "price date").isoformat()
+        if day in seen:
+            raise ValueError(f"Duplicate price date: {day}")
+        seen.add(day)
+        normalized.append({
+            "date": day,
+            "close_irr": number(row["close_irr"], "close_irr", minimum=0.000001),
+            "adjusted_close_irr": number(row["adjusted_close_irr"], "adjusted_close_irr", minimum=0.000001),
+            "volume": number(row["volume"], "volume", minimum=0, integer=True),
+        })
+    return sorted(normalized, key=lambda row: row["date"])
 
 
 def load_prices(path):
     """ISO Gregorian dates; close in IRR/share; volume in shares."""
-    with Path(path).open(encoding="utf-8-sig", newline="") as stream:
+    return parse_prices(Path(path).read_bytes().decode("utf-8-sig"))
+
+
+def parse_prices(text):
+    with io.StringIO(text, newline="") as stream:
         reader = csv.DictReader(stream)
         required = {"date", "close_irr", "adjusted_close_irr", "volume"}
         if not required.issubset(reader.fieldnames or []):
             raise ValueError(f"Price CSV must contain {sorted(required)}")
+        if len(reader.fieldnames) != len(set(reader.fieldnames)):
+            raise ValueError("Duplicate CSV column names")
         rows = []
-        seen = set()
         for row in reader:
-            day = date.fromisoformat(row["date"])
-            if day.isoformat() != row["date"] or day > date.today():
-                raise ValueError("Price dates must be ISO dates in the past or today")
-            if day in seen:
-                raise ValueError(f"Duplicate price date: {day}")
-            seen.add(day)
-            rows.append({
-                "date": day.isoformat(),
-                "close_irr": number(row["close_irr"], "close_irr", minimum=0.000001),
-                "adjusted_close_irr": number(row["adjusted_close_irr"], "adjusted_close_irr", minimum=0.000001),
-                "volume": number(row["volume"], "volume", minimum=0, integer=True),
-            })
-    if len(rows) < 2:
-        raise ValueError("At least two price observations are required")
-    return sorted(rows, key=lambda row: row["date"])
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError(f"Malformed CSV row at line {reader.line_num}")
+            rows.append(row)
+    return validate_prices(rows)
 
 
 def load_fundamentals(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return validate_fundamentals(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+
+def validate_fundamentals(data):
     if not isinstance(data, dict):
         raise ValueError("Fundamentals must be a JSON object")
+    data = data.copy()
     for field in ("symbol", "company", "source", "price_source", "adjustment_method", "period_end", "available_on", "basis", "currency", "data_kind"):
         if not isinstance(data.get(field), str) or not data[field].strip():
             raise ValueError(f"Missing or invalid field: {field}")
@@ -59,9 +99,7 @@ def load_fundamentals(path):
         raise ValueError("Use IRR monetary amounts and TTM financial statements")
     if data["data_kind"] not in ("synthetic", "user_provided"):
         raise ValueError("data_kind must be synthetic or user_provided")
-    end, available = date.fromisoformat(data["period_end"]), date.fromisoformat(data["available_on"])
-    if end.isoformat() != data["period_end"] or available.isoformat() != data["available_on"]:
-        raise ValueError("Financial dates must use YYYY-MM-DD")
+    end, available = iso_day(data["period_end"], "period_end"), iso_day(data["available_on"], "available_on")
     if end > available:
         raise ValueError("available_on cannot precede period_end")
     for field in ("revenue_irr", "assets_irr", "liabilities_irr"):
@@ -78,7 +116,14 @@ def divide(a, b):
     return a / b if b else None
 
 
-def analyze(prices, fundamentals):
+def analyze(prices, fundamentals, as_of=None):
+    prices = validate_prices(prices)
+    fundamentals = validate_fundamentals(fundamentals)
+    if as_of is not None:
+        cutoff = iso_day(as_of, "as_of").isoformat()
+        prices = [p for p in prices if p["date"] <= cutoff]
+        if len(prices) < 2:
+            raise ValueError("At least two price observations required on or before as_of")
     latest = prices[-1]
     if fundamentals["available_on"] > latest["date"]:
         raise ValueError("Financial statements were unavailable on the price valuation date")
@@ -95,7 +140,7 @@ def analyze(prices, fundamentals):
     f = fundamentals
     market_cap = latest["close_irr"] * f["shares_outstanding"]
     eps = f["net_income_irr"] / f["shares_outstanding"]
-    return {
+    result = {
         "metadata": {k: f[k] for k in ("symbol", "company", "source", "price_source", "adjustment_method", "period_end", "available_on", "basis", "currency", "data_kind")},
         "as_of": latest["date"], "observations": len(prices),
         "close_irr": latest["close_irr"], "market_cap_irr": market_cap,
@@ -110,3 +155,32 @@ def analyze(prices, fundamentals):
         "liabilities_to_assets": divide(f["liabilities_irr"], f["assets_irr"]),
         "prices": prices,
     }
+
+    # Reject overflow at the engine boundary, before reporting or writing output.
+    try:
+        json.dumps(result, allow_nan=False)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("Calculated values exceed supported numeric range") from exc
+    return result
+
+
+def compare_benchmark(prices, benchmark):
+    """Compare endpoints only when every selected equity session is present."""
+    prices = validate_prices(prices)
+    benchmark = validate_prices(benchmark)
+    by_date = {p["date"]: p["adjusted_close_irr"] for p in benchmark}
+    if any(p["date"] not in by_date for p in prices):
+        raise ValueError("Benchmark must cover every selected equity session exactly by date")
+    comparison = {}
+    for n in (1, 5, 20, 60):
+        if len(prices) <= n:
+            comparison[str(n)] = None
+            continue
+        start, end = prices[-n - 1], prices[-1]
+        equity_return = end["adjusted_close_irr"] / start["adjusted_close_irr"] - 1
+        benchmark_return = by_date[end["date"]] / by_date[start["date"]] - 1
+        comparison[str(n)] = {"start": start["date"], "end": end["date"],
+                              "benchmark_return": benchmark_return,
+                              "excess_return": equity_return - benchmark_return}
+    json.dumps(comparison, allow_nan=False)
+    return comparison
